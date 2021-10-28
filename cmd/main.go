@@ -50,8 +50,7 @@ func handleServiceConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	for {
 		byteData := make([]byte, 4)
-		_, err := conn.Read(byteData)
-
+		_, err := io.ReadFull(reader, byteData)
 		if err != nil {
 			log.Println("Connection closed")
 			conn.Close()
@@ -61,6 +60,7 @@ func handleServiceConnection(conn net.Conn) {
 		size := binary.BigEndian.Uint32(byteData)
 
 		log.Printf("Message: size=%d", size)
+
 		byteData = make([]byte, size+4)
 		n, err := io.ReadFull(reader, byteData)
 
@@ -73,13 +73,13 @@ func handleServiceConnection(conn net.Conn) {
 		if n != int(size)+4 {
 			log.Panicf("Invalid size, read: %d byte ", n)
 			conn.Close()
+			os.Exit(-1)
 		}
 
-		msg := internal.ParseMessage(byteData)
 		if size > 5000 {
 			os.Exit(-1)
 		}
-		go internal.ProcessMessage(msg, conn)
+		go internal.ProcessMessage(byteData, conn)
 		//log.Println(string(buffer))
 	}
 }

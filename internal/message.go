@@ -44,6 +44,11 @@ func ParseMessage(dataByte []byte) *NetMessage {
 	var result = NetMessage{}
 
 	result.typ = binary.BigEndian.Uint32(dataByte[:4])
+
+	if result.typ > 0x1F {
+		return nil
+	}
+
 	log.Printf("Mess: %s", string(dataByte[4:]))
 	json.Unmarshal(dataByte[4:], &result.jsonData)
 
@@ -62,8 +67,15 @@ func convertMessageToByteArray(msg *NetMessage) []byte {
 	return append(byteHead, byteData...)
 }
 
-func ProcessMessage(msg *NetMessage, conn net.Conn) {
-	//log.Printf("Message: type=%x,length=%s\n\n\n\n", msg.typ, msg.jsonData)
+func ProcessMessage(byteData []byte, conn net.Conn) {
+
+	msg := ParseMessage(byteData)
+
+	if msg == nil {
+		go forwardMessage(byteData, conn)
+		return
+	}
+
 	switch {
 	//message login data contain uid
 	case msg.typ == msgClientLogin:
@@ -88,12 +100,17 @@ func ProcessMessage(msg *NetMessage, conn net.Conn) {
 		//log.Printf("Call between %s and %s", fromClientUID, toClient.UID)
 
 		go sendMessage(toClient.SocketConn, &sendMsg)
-
-	case msg.typ > 0x1F:
-		var fromClientUID = MapAddr[conn.RemoteAddr()]
-		var toClientUID = Calls[fromClientUID]
-		go sendMessage(MapClient[toClientUID].SocketConn, msg)
 	}
+}
+
+func forwardMessage(byteData []byte, conn net.Conn) {
+	var fromClientUID = MapAddr[conn.RemoteAddr()]
+	var toClientUID = Calls[fromClientUID]
+	var byteHead = make([]byte, 4)
+	binary.BigEndian.PutUint32(byteHead, uint32(len(byteData)-4))
+
+	//log.Printf("\n%s\n\n", string(append(byteHead, byteData...)))
+	go MapClient[toClientUID].SocketConn.Write(append(byteHead, byteData...))
 }
 
 func sendMessage(conn net.Conn, msg *NetMessage) {
