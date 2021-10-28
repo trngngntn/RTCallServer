@@ -10,24 +10,24 @@ import (
 var Calls = make(map[string]string)
 
 const (
-	msgC2SLogin uint32 = 0x02 // receive:
-	msgC2SAck   uint32 = 0x03 // receive:
+	msgClientLogin uint32 = 0x01 // receive:
+	msgClientDial  uint32 = 0x02 // receive: dial request from client
 
-	msgC2SDial uint32 = 0x04 // receive: dial request from client
-	msgC2SPing uint32 = 0x05 // receive(UDP): ping for getting UDP addr
+	/////////////////////////////////////////////////////////////////////////////////////////////////
 
-	msgC2SAcceptCall  uint32 = 0x1A // receive(UDP): accepted call signal
-	msgC2SDeclineCall uint32 = 0x1B // receive: rejected call signal
+	// msgRelayCallAccepted uint32 = 0x20
+	// msgRelayCallDeclined uint32 = 0x21
+	// msgRelayCallEnded    uint32 = 0x22
 
-	msgC2SEndCall uint32 = 0x1C // receive
+	// msgRelayWebRTCCandidate uint32 = 0x30
+	// msgRelayWebRTCOffer     uint32 = 0x31
+	// msgRelayWebRTCAnswer    uint32 = 0x32
 
-	msgS2CBadIdentity uint32 = 0x00
-	msgS2CLoggedIn    uint32 = 0x01
+	/////////////////////////////////////////////////////////////////////////////////////////////////
 
-	msgS2CRequestCall  uint32 = 0x0B // send: call request
-	msgS2CCallDeclined uint32 = 0x0C // send: call request from client is rejected by other client
-	msgS2CCallEnded    uint32 = 0x0C // send: call request from client is rejected by other client
-	msgS2CPeerAddr     uint32 = 0x02 // send: UDP addr to other client
+	msgServerBadIdentity uint32 = 0x00
+	msgServerLoggedIn    uint32 = 0x01
+	msgServerRequestCall uint32 = 0x10
 )
 
 type NetMessage struct {
@@ -63,36 +63,40 @@ func convertMessageToByteArray(msg *NetMessage) []byte {
 }
 
 func ProcessMessage(msg *NetMessage, conn net.Conn) {
-	//log.Printf("Processing message type: %d", msg.typ)
-	switch msg.typ {
+	log.Printf("Processing message type: %d", msg.typ)
+	switch {
 	//message login data contain uid
-	case msgC2SLogin:
+	case msg.typ == msgClientLogin:
 		var uid = msg.jsonData["uid"].(string)
-		MapClient[uid] = &Client{socketConn: conn}
+		MapClient[uid] = &Client{SocketConn: conn}
 		MapAddr[conn.RemoteAddr()] = uid
 		log.Printf("Registered UID: %s", uid)
-		var sendMsg = NetMessage{typ: msgS2CLoggedIn, jsonData: make(map[string]interface{})}
+		var sendMsg = NetMessage{typ: msgServerLoggedIn, jsonData: make(map[string]interface{})}
 		sendMsg.jsonData["uid"] = uid
 		go sendMessage(conn, &sendMsg)
 
-	case msgC2SDial:
-		var sentClientUID = MapAddr[conn.RemoteAddr()]
-		var recvClient = MapClient[msg.jsonData["uid"].(string)]
-		var sendMsg = NetMessage{typ: msgS2CRequestCall, jsonData: make(map[string]interface{})}
-		sendMsg.jsonData["caller"] = sentClientUID
-		go sendMessage(recvClient.socketConn, &sendMsg)
-	}
-}
+	case msg.typ == msgClientDial:
+		var fromClientUID = MapAddr[conn.RemoteAddr()]
+		var toClientUID = msg.jsonData["uid"].(string)
+		var toClient = MapClient[toClientUID]
+		var sendMsg = NetMessage{typ: msgServerRequestCall, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["caller"] = fromClientUID
 
-func ProcessUDPMessage(msg *NetMessage, addr string) {
-	var recvClientUID = msg.jsonData["otherPeer"].(string)
-	var recvConn = MapClient[recvClientUID].socketConn
-	var sendMsg = NetMessage{typ: msgS2CPeerAddr, jsonData: make(map[string]interface{})}
-	sendMsg.jsonData["peerAddr"] = addr
-	go sendMessage(recvConn, &sendMsg)
+		Calls[fromClientUID] = toClientUID
+		Calls[toClientUID] = fromClientUID
+
+		//log.Printf("Call between %s and %s", fromClientUID, toClient.UID)
+
+		go sendMessage(toClient.SocketConn, &sendMsg)
+
+	case msg.typ > 0x1F:
+		var fromClientUID = MapAddr[conn.RemoteAddr()]
+		var toClientUID = Calls[fromClientUID]
+		go sendMessage(MapClient[toClientUID].SocketConn, msg)
+	}
 }
 
 func sendMessage(conn net.Conn, msg *NetMessage) {
 	conn.Write(convertMessageToByteArray(msg))
-	log.Printf("Sent message to %s\n", conn.LocalAddr().String())
+	log.Printf("Sent message to %s\n", conn.RemoteAddr().String())
 }

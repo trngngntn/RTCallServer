@@ -12,6 +12,6 @@ var MapClient = make(map[string]*Client)
 var MapAddr = make(map[net.Addr]string)
 
 type Client struct {
-	socketConn   net.Conn
+	SocketConn   net.Conn
 	DatagramAddr string
 }

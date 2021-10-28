@@ -24,16 +24,7 @@ func main() {
 		return
 	}
 
-	packetConn, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		fmt.Println("UDP error!")
-		return
-	}
-
 	defer l.Close()
-	defer packetConn.Close()
-
-	go handlePacket(packetConn)
 
 	for {
 		conn, err := l.Accept()
@@ -50,26 +41,6 @@ func main() {
 
 func exit() {
 	fmt.Println("Exiting")
-}
-
-func handlePacket(packetConn net.PacketConn) {
-	for {
-		buffer := make([]byte, bufferSize)
-		//n is int
-		_, clientAddr, err := packetConn.ReadFrom(buffer)
-		if err != nil {
-			fmt.Println("Packet error!")
-			return
-		}
-
-		size := binary.BigEndian.Uint32(buffer[:4]) + 8
-
-		msg := internal.ParseMessage(buffer[4:size])
-		log.Println(size)
-		log.Println(string(buffer[8:size]) + " " + clientAddr.String())
-
-		internal.ProcessUDPMessage(msg, clientAddr.String())
-	}
 }
 
 func handleServiceConnection(conn net.Conn) {
