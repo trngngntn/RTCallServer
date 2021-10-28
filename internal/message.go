@@ -44,7 +44,7 @@ func ParseMessage(dataByte []byte) *NetMessage {
 	var result = NetMessage{}
 
 	result.typ = binary.BigEndian.Uint32(dataByte[:4])
-
+	log.Printf("Mess: %s", string(dataByte[4:]))
 	json.Unmarshal(dataByte[4:], &result.jsonData)
 
 	return &result
@@ -63,7 +63,7 @@ func convertMessageToByteArray(msg *NetMessage) []byte {
 }
 
 func ProcessMessage(msg *NetMessage, conn net.Conn) {
-	log.Printf("Processing message type: %d", msg.typ)
+	//log.Printf("Message: type=%x,length=%s\n\n\n\n", msg.typ, msg.jsonData)
 	switch {
 	//message login data contain uid
 	case msg.typ == msgClientLogin:

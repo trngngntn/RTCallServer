@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 	"trngngntn/rcserver/internal"
 )
 
@@ -44,9 +47,10 @@ func exit() {
 }
 
 func handleServiceConnection(conn net.Conn) {
+	reader := bufio.NewReader(conn)
 	for {
-		byteSize := make([]byte, 4)
-		_, err := conn.Read(byteSize)
+		byteData := make([]byte, 4)
+		_, err := conn.Read(byteData)
 
 		if err != nil {
 			log.Println("Connection closed")
@@ -54,11 +58,27 @@ func handleServiceConnection(conn net.Conn) {
 			return
 		}
 
-		byte := make([]byte, 4+binary.BigEndian.Uint32(byteSize))
-		_, err = conn.Read(byte)
+		size := binary.BigEndian.Uint32(byteData)
 
-		msg := internal.ParseMessage(byte)
+		log.Printf("Message: size=%d", size)
+		byteData = make([]byte, size+4)
+		n, err := io.ReadFull(reader, byteData)
 
+		if err != nil {
+			log.Println("Connection closed")
+			conn.Close()
+			return
+		}
+
+		if n != int(size)+4 {
+			log.Panicf("Invalid size, read: %d byte ", n)
+			conn.Close()
+		}
+
+		msg := internal.ParseMessage(byteData)
+		if size > 5000 {
+			os.Exit(-1)
+		}
 		go internal.ProcessMessage(msg, conn)
 		//log.Println(string(buffer))
 	}
