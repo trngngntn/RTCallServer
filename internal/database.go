@@ -128,3 +128,28 @@ func Login(username string, password string) bool {
 	}
 	
 }
+
+func AddFriend(username1 string, username2 string) {
+	db := CreateConnection()
+	defer db.Close()
+
+	//TODO: Validation
+
+	log.Println("Creating friendship between " + username1 + " and " + username2)
+
+	insertFriendSQL := `INSERT INTO Friend(user1, user2, friendstatus) VALUES (?, ?, ?)`
+
+	statement, err := db.Prepare(insertFriendSQL)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = statement.Exec(username1, username2, 1)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Friendship between " + username1 + " and " + username2 + "created!")
+}
