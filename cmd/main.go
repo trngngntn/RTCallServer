@@ -19,7 +19,11 @@ const (
 var m = make(map[string]*net.Conn)
 
 func main() {
-	fmt.Println("Starting server...")
+	log.Println("Starting server...")
+
+	//internal.RegisteredUser("sircle", "abc123", "Sircle", "Sircle")
+	//log.Println(internal.Login("sircle", "abc123"))
+	//internal.CreateConnection()fmt.Println("Starting server...")
 
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
