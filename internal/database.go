@@ -9,6 +9,11 @@ import (
 
 const database = "../data/voicechat.db"
 
+type Friend struct {
+	username string
+	status int
+}
+
 func CreateConnection()(*sql.DB) {
 	// Verify database
 	if (fileExist(database)) {
@@ -129,13 +134,13 @@ func Login(username string, password string) bool {
 	
 }
 
-func AddFriend(username1 string, username2 string) {
+func CreateFriendRequest(username1 string, username2 string) {
 	db := CreateConnection()
 	defer db.Close()
 
 	//TODO: Validation
 
-	log.Println("Creating friendship between " + username1 + " and " + username2)
+	log.Println("Creating friend invitation from " + username1 + " to " + username2)
 
 	insertFriendSQL := `INSERT INTO Friend(user1, user2, friendstatus) VALUES (?, ?, ?)`
 
@@ -145,11 +150,102 @@ func AddFriend(username1 string, username2 string) {
 		log.Fatal(err)
 	}
 
-	_, err = statement.Exec(username1, username2, 1)
+	_, err = statement.Exec(username1, username2, 0)
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println("Friendship between " + username1 + " and " + username2 + "created!")
+	log.Println(username1 + " sent a friend request to " + username2)
+}
+
+func AcceptFriendRequest(username1 string, username2 string) {
+	db := CreateConnection()
+	defer db.Close()
+
+	//TODO: Validation
+
+	log.Println("Creating friendship between " + username1 + " and " + username2)
+
+	insertFriendSQL := `UPDATE Friend SET friendstatus=? WHERE user1=?, user2=?`
+
+	statement, err := db.Prepare(insertFriendSQL)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = statement.Exec(1, username1, username2)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("Friendship between " + username1 + " and " + username2 + " established!")
+}
+
+func DeclineFriendRequest(username1 string, username2 string) {
+	db := CreateConnection()
+	defer db.Close()
+
+	//TODO: Validation
+
+	insertFriendSQL := `DELETE FROM Friend WHERE user1=?, user2=?`
+
+	statement, err := db.Prepare(insertFriendSQL)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = statement.Exec(username1, username2)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(username2 + " declined friend request of " + username1)
+}
+
+func GetFriendList(uid string) ([]Friend){
+	db := CreateConnection()
+	defer db.Close()
+
+	// TODO: Validation
+
+	row, err := db.Query("SELECT Friend.user2, Friend.friendstatus FROM Friend INNER JOIN Users ON Friend.user1 = Users.username WHERE Friend.user1 = ? AND friendstatus = 1", uid)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer row.Close()
+	var friends []Friend
+	for row.Next() {
+		var uid string
+		var status int
+		row.Scan(&uid, &status)
+		friends = append(friends, Friend{uid, status})
+	}
+	log.Println(friends)
+	return friends
+}
+
+func DisplayFriend(uid string) {
+	db := CreateConnection()
+	defer db.Close()
+
+	// TODO: Validation
+
+	row, err := db.Query("SELECT Friend.user2 FROM Friend INNER JOIN Users ON Friend.user1 = Users.username WHERE Friend.user1 = ? AND friendstatus = 1", uid)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer row.Close()
+
+	for row.Next() {
+		var uid string
+		row.Scan(&uid)
+		log.Println("Friend: ", uid)
+	}
 }

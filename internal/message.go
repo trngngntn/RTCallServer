@@ -10,8 +10,12 @@ import (
 var Calls = make(map[string]string)
 
 const (
-	msgClientLogin uint32 = 0x01 // receive:
-	msgClientDial  uint32 = 0x02 // receive: dial request from client
+	msgClientLogin 		uint32 = 0x01 // receive:
+	msgClientDial  		uint32 = 0x02 // receive: dial request from client
+	msgClientFriendList uint32 = 0x03
+	msgClientFriendAdd	uint32 = 0x04
+	msgClientFriendAccept uint32 = 0x05
+	msgClientFriendDecline uint32 = 0x06
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -100,7 +104,35 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 		//log.Printf("Call between %s and %s", fromClientUID, toClient.UID)
 
 		go sendMessage(toClient.SocketConn, &sendMsg)
+
+	case msg.typ == msgClientFriendList:
+		var uid = msg.jsonData["uid"].(string)
+		friends := GetFriendList(uid)
+		
+		var sendMsg = NetMessage{typ: msgServerRequestCall, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["friendlist"] = friends
+
+		go sendMessage(MapClient[uid].SocketConn, &sendMsg)
+
+	case msg.typ == msgClientFriendAdd:
+		var uid1 = msg.jsonData["uid1"].(string)
+		var uid2 = msg.jsonData["uid2"].(string)
+		CreateFriendRequest(uid1, uid2)
+
+	case msg.typ == msgClientFriendAccept:
+		var uid1 = msg.jsonData["uid1"].(string)
+		var uid2 = msg.jsonData["uid2"].(string)
+		AcceptFriendRequest(uid1, uid2)
+
+	case msg.typ == msgClientFriendDecline:
+		var uid1 = msg.jsonData["uid1"].(string)
+		var uid2 = msg.jsonData["uid2"].(string)
+		DeclineFriendRequest(uid1, uid2)
 	}
+
+
+
+
 }
 
 func forwardMessage(byteData []byte, conn net.Conn) {
