@@ -19,6 +19,7 @@ const (
 var m = make(map[string]*net.Conn)
 
 func main() {
+	//internal.Prep()
 	log.Println("Starting server...")
 
 	//go randomInitDb()
@@ -87,12 +88,6 @@ func handleServiceConnection(conn net.Conn) {
 }
 
 func randomInitDb() {
-	internal.RegisteredUser("sircle", "abc123", "Sircle", "Sircle")
-	internal.RegisteredUser("sircle1", "abc123", "Sircle1", "Sircle1")
-	internal.RegisteredUser("sircle2", "abc123", "Sircle2", "Sircle2")
-	internal.RegisteredUser("sircle3", "abc123", "Sircle3", "Sircle3")
-	internal.AddFriend("sircle", "sircle1")
-	internal.AddFriend("sircle", "sircle2")
 	db := internal.CreateConnection()
 	db.Close()
 

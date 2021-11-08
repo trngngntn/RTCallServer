@@ -5,17 +5,19 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"time"
 )
 
 var Calls = make(map[string]string)
 
 const (
-	msgClientLogin 		uint32 = 0x01 // receive:
-	msgClientDial  		uint32 = 0x02 // receive: dial request from client
-	msgClientFriendList uint32 = 0x03
-	msgClientFriendAdd	uint32 = 0x04
-	msgClientFriendAccept uint32 = 0x05
-	msgClientFriendDecline uint32 = 0x06
+	msgClientLogin          uint32 = 0x01 // receive:
+	msgClientRegister       uint32 = 0x02 // receive:
+	msgClientDial           uint32 = 0x03 // receive: dial request from client
+	msgClientRequestContact uint32 = 0x04
+	msgClientAddContact     uint32 = 0x05
+	msgClientApproveContact uint32 = 0x06
+	msgClientRejectContact  uint32 = 0x07
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -31,7 +33,22 @@ const (
 
 	msgServerBadIdentity uint32 = 0x00
 	msgServerLoggedIn    uint32 = 0x01
-	msgServerRequestCall uint32 = 0x10
+
+	msgServerRegistered     uint32 = 0x02
+	msgServerRegisterFailed uint32 = 0x03
+
+	msgServerContactList     uint32 = 0x04
+	msgServerContactInvalid  uint32 = 0x05
+	msgServerContactPending  uint32 = 0x06
+	msgServerContactApproved uint32 = 0x07
+
+	msgServerAllNotif    uint32 = 0x08
+	msgServerUnreadNotif uint32 = 0x09
+	msgServerNewNotif    uint32 = 0x10
+
+	msgServerRequestCall uint32 = 0x11
+
+	notifContactRequest uint32 = 0x01
 )
 
 type NetMessage struct {
@@ -83,12 +100,38 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 	switch {
 	//message login data contain uid
 	case msg.typ == msgClientLogin:
-		var uid = msg.jsonData["uid"].(string)
-		MapClient[uid] = &Client{SocketConn: conn}
-		MapAddr[conn.RemoteAddr()] = uid
-		log.Printf("Registered UID: %s", uid)
-		var sendMsg = NetMessage{typ: msgServerLoggedIn, jsonData: make(map[string]interface{})}
-		sendMsg.jsonData["uid"] = uid
+		username := msg.jsonData["username"].(string)
+		password := msg.jsonData["password"].(string)
+		if Login(username, password) {
+			MapClient[username] = &Client{SocketConn: conn}
+			MapAddr[conn.RemoteAddr()] = username
+			log.Printf("User login: %s", username)
+			var sendMsg = NetMessage{typ: msgServerLoggedIn, jsonData: make(map[string]interface{})}
+			sendMsg.jsonData["uid"] = username
+			go sendMessage(conn, &sendMsg)
+		} else {
+			var sendMsg = NetMessage{typ: msgServerBadIdentity, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		}
+
+	case msg.typ == msgClientRegister:
+		var username = msg.jsonData["username"].(string)
+		if UsernameExists(username) {
+			sendMsg := NetMessage{typ: msgServerRegisterFailed, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		} else {
+			var displayName = msg.jsonData["displayName"].(string)
+			var password = msg.jsonData["password"].(string)
+			CreateNewUser(username, password, displayName)
+			sendMsg := NetMessage{typ: msgServerRegistered, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		}
+
+	case msg.typ == msgClientRequestContact:
+		var fromClientUID = MapAddr[conn.RemoteAddr()]
+		contactList := GetContactList(fromClientUID)
+		sendMsg := NetMessage{typ: msgServerContactList, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["contactList"] = contactList
 		go sendMessage(conn, &sendMsg)
 
 	case msg.typ == msgClientDial:
@@ -101,37 +144,41 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 		Calls[fromClientUID] = toClientUID
 		Calls[toClientUID] = fromClientUID
 
-		//log.Printf("Call between %s and %s", fromClientUID, toClient.UID)
+		log.Printf("Call between %s and %s", fromClientUID, toClientUID)
 
 		go sendMessage(toClient.SocketConn, &sendMsg)
 
-	case msg.typ == msgClientFriendList:
-		var uid = msg.jsonData["uid"].(string)
-		friends := GetFriendList(uid)
-		
-		var sendMsg = NetMessage{typ: msgServerRequestCall, jsonData: make(map[string]interface{})}
-		sendMsg.jsonData["friendlist"] = friends
+	case msg.typ == msgClientAddContact:
+		var fromClientUID = MapAddr[conn.RemoteAddr()]
+		var contactUsername = msg.jsonData["username"].(string)
+		if UsernameExists(contactUsername) {
+			sendMsg := NetMessage{typ: msgServerContactPending, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+			var noti = Notification{Uid: contactUsername, Timestamp: time.Now(), Data: make(map[string]interface{}), Status: 0}
+			noti.Data["type"] = notifContactRequest
+			noti.Data["fromUid"] = fromClientUID
+			AddPendingContact(fromClientUID, contactUsername)
+			notify(contactUsername)
+		} else {
+			sendMsg := NetMessage{typ: msgServerContactInvalid, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		}
 
-		go sendMessage(MapClient[uid].SocketConn, &sendMsg)
+	case msg.typ == msgClientApproveContact:
+		fromClientUID := MapAddr[conn.RemoteAddr()]
+		toClientUID := msg.jsonData["uid"].(string)
+		notifId := msg.jsonData["notifId"].(int)
+		ApproveContact(fromClientUID, toClientUID)
+		Hide(notifId)
 
-	case msg.typ == msgClientFriendAdd:
-		var uid1 = msg.jsonData["uid1"].(string)
-		var uid2 = msg.jsonData["uid2"].(string)
-		CreateFriendRequest(uid1, uid2)
+	case msg.typ == msgClientRejectContact:
+		fromClientUID := MapAddr[conn.RemoteAddr()]
+		toClientUID := msg.jsonData["uid"].(string)
+		notifId := msg.jsonData["notifId"].(int)
+		RejectContact(fromClientUID, toClientUID)
+		Hide(notifId)
 
-	case msg.typ == msgClientFriendAccept:
-		var uid1 = msg.jsonData["uid1"].(string)
-		var uid2 = msg.jsonData["uid2"].(string)
-		AcceptFriendRequest(uid1, uid2)
-
-	case msg.typ == msgClientFriendDecline:
-		var uid1 = msg.jsonData["uid1"].(string)
-		var uid2 = msg.jsonData["uid2"].(string)
-		DeclineFriendRequest(uid1, uid2)
 	}
-
-
-
 
 }
 
@@ -143,6 +190,12 @@ func forwardMessage(byteData []byte, conn net.Conn) {
 
 	//log.Printf("\n%s\n\n", string(append(byteHead, byteData...)))
 	go MapClient[toClientUID].SocketConn.Write(append(byteHead, byteData...))
+}
+
+func notify(uid string) {
+	if MapClient["uid"] != nil {
+
+	}
 }
 
 func sendMessage(conn net.Conn, msg *NetMessage) {
