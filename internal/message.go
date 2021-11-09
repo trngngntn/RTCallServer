@@ -3,14 +3,17 @@ package internal
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"time"
 )
 
-var Calls = make(map[string]string)
+var Caller = make(map[string]string)
+var Callee = make(map[string]string)
 
 const (
+	msgClientConnect        uint32 = 0x00
 	msgClientLogin          uint32 = 0x01 // receive:
 	msgClientRegister       uint32 = 0x02 // receive:
 	msgClientDial           uint32 = 0x03 // receive: dial request from client
@@ -18,12 +21,15 @@ const (
 	msgClientAddContact     uint32 = 0x05
 	msgClientApproveContact uint32 = 0x06
 	msgClientRejectContact  uint32 = 0x07
+	msgClientReqNotif       uint32 = 0x08
+	msgClientSeenNotif      uint32 = 0x09
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////
 
-	// msgRelayCallAccepted uint32 = 0x20
-	// msgRelayCallDeclined uint32 = 0x21
-	// msgRelayCallEnded    uint32 = 0x22
+	msgRelayCallAccepted uint32 = 0x20
+	msgRelayCallDeclined uint32 = 0x21
+	msgRelayCallPreEnded uint32 = 0x22
+	msgRelayCallEnded    uint32 = 0x23
 
 	// msgRelayWebRTCCandidate uint32 = 0x30
 	// msgRelayWebRTCOffer     uint32 = 0x31
@@ -47,8 +53,11 @@ const (
 	msgServerNewNotif    uint32 = 0x10
 
 	msgServerRequestCall uint32 = 0x11
+	msgServerCalleeBusy  uint32 = 0x12
+	msgServerCalleeOff   uint32 = 0x13
 
 	notifContactRequest uint32 = 0x01
+	notifMissedCall     uint32 = 0x00
 )
 
 type NetMessage struct {
@@ -66,7 +75,7 @@ func ParseMessage(dataByte []byte) *NetMessage {
 
 	result.typ = binary.BigEndian.Uint32(dataByte[:4])
 
-	if result.typ > 0x1F {
+	if result.typ > 0x2F {
 		return nil
 	}
 
@@ -99,6 +108,11 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 
 	switch {
 	//message login data contain uid
+	case msg.typ == msgClientConnect:
+		uid := msg.jsonData["uid"].(string)
+		log.Printf("Service connect: %s", uid)
+		MapClient[uid] = &Client{SocketConn: conn}
+		MapAddr[conn.RemoteAddr()] = uid
 	case msg.typ == msgClientLogin:
 		username := msg.jsonData["username"].(string)
 		password := msg.jsonData["password"].(string)
@@ -137,28 +151,43 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 	case msg.typ == msgClientDial:
 		var fromClientUID = MapAddr[conn.RemoteAddr()]
 		var toClientUID = msg.jsonData["uid"].(string)
-		var toClient = MapClient[toClientUID]
-		var sendMsg = NetMessage{typ: msgServerRequestCall, jsonData: make(map[string]interface{})}
-		sendMsg.jsonData["caller"] = fromClientUID
 
-		Calls[fromClientUID] = toClientUID
-		Calls[toClientUID] = fromClientUID
+		_, existCaller := Caller[toClientUID]
+		_, existCallee := Callee[toClientUID]
+		_, existClient := MapClient[toClientUID]
+		if existCallee || existCaller {
+			sendMsg := NetMessage{typ: msgServerCalleeBusy, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		} else if existClient {
+			toClient := MapClient[toClientUID]
+			sendMsg := NetMessage{typ: msgServerRequestCall, jsonData: make(map[string]interface{})}
+			sendMsg.jsonData["caller"] = fromClientUID
+			sendMsg.jsonData["callerName"] = GetContact(fromClientUID).DisplayName
 
-		log.Printf("Call between %s and %s", fromClientUID, toClientUID)
+			Caller[fromClientUID] = toClientUID
+			Callee[toClientUID] = fromClientUID
 
-		go sendMessage(toClient.SocketConn, &sendMsg)
+			log.Printf("Call between %s and %s", fromClientUID, toClientUID)
+
+			go sendMessage(toClient.SocketConn, &sendMsg)
+		} else {
+			sendMsg := NetMessage{typ: msgServerCalleeOff, jsonData: make(map[string]interface{})}
+			go sendMessage(conn, &sendMsg)
+		}
 
 	case msg.typ == msgClientAddContact:
 		var fromClientUID = MapAddr[conn.RemoteAddr()]
-		var contactUsername = msg.jsonData["username"].(string)
+		var contactUsername = msg.jsonData["uid"].(string)
 		if UsernameExists(contactUsername) {
 			sendMsg := NetMessage{typ: msgServerContactPending, jsonData: make(map[string]interface{})}
 			go sendMessage(conn, &sendMsg)
 			var noti = Notification{Uid: contactUsername, Timestamp: time.Now(), Data: make(map[string]interface{}), Status: 0}
 			noti.Data["type"] = notifContactRequest
 			noti.Data["fromUid"] = fromClientUID
+			noti.Data["userDisplay"] = GetContact(fromClientUID).DisplayName
+			Push(&noti)
 			AddPendingContact(fromClientUID, contactUsername)
-			notify(contactUsername)
+			notifyNew(contactUsername, &noti)
 		} else {
 			sendMsg := NetMessage{typ: msgServerContactInvalid, jsonData: make(map[string]interface{})}
 			go sendMessage(conn, &sendMsg)
@@ -167,7 +196,7 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 	case msg.typ == msgClientApproveContact:
 		fromClientUID := MapAddr[conn.RemoteAddr()]
 		toClientUID := msg.jsonData["uid"].(string)
-		notifId := msg.jsonData["notifId"].(int)
+		notifId := int(msg.jsonData["notifId"].(float64))
 		ApproveContact(fromClientUID, toClientUID)
 		Hide(notifId)
 
@@ -177,28 +206,112 @@ func ProcessMessage(byteData []byte, conn net.Conn) {
 		notifId := msg.jsonData["notifId"].(int)
 		RejectContact(fromClientUID, toClientUID)
 		Hide(notifId)
+	case msg.typ == msgClientReqNotif:
+		fromClientUID := MapAddr[conn.RemoteAddr()]
+		notifList := FetchAll(fromClientUID)
+		sendMsg := NetMessage{typ: msgServerAllNotif, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["notifList"] = notifList
+		fmt.Println(string(convertMessageToByteArray(&sendMsg)))
+		go sendMessage(conn, &sendMsg)
 
+	case msg.typ == msgRelayCallAccepted:
+		calleeUid := MapAddr[conn.RemoteAddr()]
+		callerUid := Callee[calleeUid]
+		_, exist := MapClient[callerUid]
+		if exist {
+			sendMessage(MapClient[callerUid].SocketConn, msg)
+		}
+		//forwardMessage(convertMessageToByteArray(msg), conn)
+	case msg.typ == msgRelayCallDeclined:
+		calleeUid := MapAddr[conn.RemoteAddr()]
+		callerUid := Callee[calleeUid]
+		delete(Callee, calleeUid)
+		delete(Caller, callerUid)
+		_, exist := MapClient[callerUid]
+		if exist {
+			sendMessage(MapClient[callerUid].SocketConn, msg)
+		}
+		//forwardMessage(convertMessageToByteArray(msg), conn)
+	case msg.typ == msgRelayCallPreEnded:
+		callerUid := MapAddr[conn.RemoteAddr()]
+		calleeUid := Caller[callerUid]
+		delete(Callee, calleeUid)
+		delete(Caller, callerUid)
+		var noti = Notification{Uid: calleeUid, Timestamp: time.Now(), Data: make(map[string]interface{}), Status: 0}
+		noti.Data["type"] = notifMissedCall
+		noti.Data["fromUid"] = callerUid
+		noti.Data["userDisplay"] = GetContact(callerUid).DisplayName
+		Push(&noti)
+		notifyNew(calleeUid, &noti)
+		_, exist := MapClient[calleeUid]
+		if exist {
+			sendMessage(MapClient[calleeUid].SocketConn, msg)
+		}
+		//forwardMessage(convertMessageToByteArray(msg), conn)
+	case msg.typ == msgRelayCallEnded:
+		fromClientUID := MapAddr[conn.RemoteAddr()]
+		toClientUID, exist := Caller[fromClientUID]
+		if !exist {
+			toClientUID = Callee[fromClientUID]
+			delete(Callee, fromClientUID)
+			delete(Caller, toClientUID)
+		} else {
+			delete(Callee, toClientUID)
+			delete(Caller, fromClientUID)
+		}
+		_, exist = MapClient[toClientUID]
+		if exist {
+			sendMessage(MapClient[toClientUID].SocketConn, msg)
+		}
+		//forwardMessage(convertMessageToByteArray(msg), conn)
 	}
 
 }
 
 func forwardMessage(byteData []byte, conn net.Conn) {
 	var fromClientUID = MapAddr[conn.RemoteAddr()]
-	var toClientUID = Calls[fromClientUID]
+	toClientUID, exist := Caller[fromClientUID]
+	if !exist {
+		toClientUID = Callee[fromClientUID]
+	}
 	var byteHead = make([]byte, 4)
 	binary.BigEndian.PutUint32(byteHead, uint32(len(byteData)-4))
 
-	//log.Printf("\n%s\n\n", string(append(byteHead, byteData...)))
-	go MapClient[toClientUID].SocketConn.Write(append(byteHead, byteData...))
+	_, exist = MapClient[toClientUID]
+	if exist {
+		go MapClient[toClientUID].SocketConn.Write(append(byteHead, byteData...))
+	}
 }
 
-func notify(uid string) {
-	if MapClient["uid"] != nil {
+func notify(uid string, noti *Notification) {
+	if MapClient[uid] != nil {
+		notifList := FetchUnread(uid)
+		sendMsg := NetMessage{typ: msgServerUnreadNotif, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["notifList"] = notifList
+		go sendMessage(MapClient[uid].SocketConn, &sendMsg)
+	}
+}
 
+func notifyNew(uid string, noti *Notification) {
+	if MapClient[uid] != nil {
+		sendMsg := NetMessage{typ: msgServerNewNotif, jsonData: make(map[string]interface{})}
+		sendMsg.jsonData["notif"] = noti
+		go sendMessage(MapClient[uid].SocketConn, &sendMsg)
 	}
 }
 
 func sendMessage(conn net.Conn, msg *NetMessage) {
-	conn.Write(convertMessageToByteArray(msg))
-	log.Printf("Sent message to %s\n", conn.RemoteAddr().String())
+	if conn == nil {
+		return
+	}
+	byteData := convertMessageToByteArray(msg)
+	n, err := conn.Write(byteData)
+	if err != nil {
+		log.Panic(err.Error())
+	}
+	if n != len(byteData) {
+		log.Panic("I/O error")
+	}
+	log.Printf("Sent message to %s", conn.RemoteAddr().String())
+	log.Println(byteData)
 }

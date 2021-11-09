@@ -56,13 +56,18 @@ func handleServiceConnection(conn net.Conn) {
 		_, err := io.ReadFull(reader, byteData)
 		if err != nil {
 			log.Println("Connection closed")
+			uid := internal.MapAddr[conn.RemoteAddr()]
+			delete(internal.MapClient, uid)
+			delete(internal.Callee, uid)
+			delete(internal.Caller, uid)
+			delete(internal.MapAddr, conn.RemoteAddr())
 			conn.Close()
 			return
 		}
 
 		size := binary.BigEndian.Uint32(byteData)
 
-		log.Printf("Message: size=%d", size)
+		log.Printf("Received Message: size=%d", size)
 
 		byteData = make([]byte, size+4)
 		n, err := io.ReadFull(reader, byteData)

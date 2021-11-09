@@ -2,11 +2,6 @@ package internal
 
 import "log"
 
-type Contact struct {
-	username string
-	status   int
-}
-
 func AddPendingContact(username1 string, username2 string) {
 	db := CreateConnection()
 	defer db.Close()
@@ -16,8 +11,8 @@ func AddPendingContact(username1 string, username2 string) {
 	log.Println("Creating friend invitation from " + username1 + " to " + username2)
 
 	sql := `
-	INSERT INTO "Contacts"(user1, user2, friendstatus) 
-	VALUES (?, ?, ?)`
+	INSERT INTO "Contacts"(user1, user2, status) 
+	VALUES (?, ?, 0)`
 
 	statement, err := db.Prepare(sql)
 
@@ -25,7 +20,7 @@ func AddPendingContact(username1 string, username2 string) {
 		log.Fatal(err)
 	}
 
-	_, err = statement.Exec(username1, username2, 0)
+	_, err = statement.Exec(username1, username2)
 
 	if err != nil {
 		log.Fatal(err)
@@ -44,8 +39,8 @@ func ApproveContact(username1 string, username2 string) {
 
 	sql := `
 		UPDATE "Contacts" 
-		SET friendstatus=? 
-		WHERE user1=?, user2=?`
+		SET "status" = 1
+		WHERE ("user1" = ? AND "user2" = ?) OR ("user2" = ? AND "user1" = ?)`
 
 	statement, err := db.Prepare(sql)
 
@@ -53,7 +48,7 @@ func ApproveContact(username1 string, username2 string) {
 		log.Fatal(err)
 	}
 
-	_, err = statement.Exec(1, username1, username2)
+	_, err = statement.Exec(username1, username2, username1, username2)
 
 	if err != nil {
 		log.Fatal(err)
@@ -70,7 +65,7 @@ func RejectContact(username1 string, username2 string) {
 
 	sql := `
 		DELETE FROM "Contacts" 
-		WHERE user1=?, user2=?`
+		WHERE "user1" = ? AND "user2" = ?`
 
 	statement, err := db.Prepare(sql)
 
@@ -87,6 +82,23 @@ func RejectContact(username1 string, username2 string) {
 	log.Println(username2 + " declined friend request of " + username1)
 }
 
+func GetContact(uid string) User {
+	db := CreateConnection()
+	defer db.Close()
+
+	// TODO: Validation
+
+	sql := `
+		SELECT "fullname"
+		FROM "Users"
+		WHERE "username" = ?`
+
+	var user User
+	user.Username = uid
+	db.QueryRow(sql, uid, uid).Scan(&user.DisplayName)
+	return user
+}
+
 func GetContactList(uid string) (contactList []User) {
 	db := CreateConnection()
 	defer db.Close()
@@ -98,10 +110,10 @@ func GetContactList(uid string) (contactList []User) {
 		FROM "Users"
 		WHERE "username" IN
 		(SELECT "user1" FROM "Contacts" 
-		WHERE "user2" = ?)
+		WHERE "user2" = ? AND "status" = 1)
 		OR "username" IN 
 		(SELECT "user2" FROM "Contacts" 
-		WHERE "user1" = ?)`
+		WHERE "user1" = ? AND "status" = 1)`
 
 	row, err := db.Query(sql, uid, uid)
 	if err != nil {
